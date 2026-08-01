@@ -1,0 +1,79 @@
+# syntax=docker/dockerfile:1
+#
+# Multi-arch build (needs qemu-user-static/binfmt registered on the host for
+# the non-native arch — e.g. `podman machine` on macOS, or a one-time
+# `podman run --rm --privileged docker.io/multiarch/qemu-user-static --reset -p yes`
+# on Linux):
+#   podman build --platform linux/amd64,linux/arm64 \
+#     --manifest digitalsign -f docker/dockerfile .
+#   podman manifest push digitalsign docker://<registry>/digitalsign:latest
+#
+# The binary is a fully static musl build with OpenSSL vendored (built from
+# source and linked in, `openssl/vendored` — see root Cargo.toml) rather than
+# the usual dynamic link against the base image's system libssl. That's
+# deliberate: the required runtime (`redhat/ubi8-micro`, glibc 2.28 / OpenSSL
+# 1.1.1 in its repos) is far older than a Debian trixie builder produces by
+# default (glibc 2.41 / OpenSSL 3.x) — a normal dynamically-linked build
+# fails on ubi8-micro with a `GLIBC_2.3x not found` error before it even gets
+# to the OpenSSL SONAME mismatch. Static linking sidesteps both: the binary
+# carries its own libc and libssl, so it doesn't care what either image ships.
+#
+# Run:  podman run -p 8080:8080 --env-file .env \
+#         -v /path/to/ca.key:/run/secrets/ca.key:ro,Z \
+#         -e ROOT_CA_KEY_PATH=/run/secrets/ca.key \
+#         --userns=keep-id \
+#         digitalsign
+#
+# Required at runtime (see .env.example / SCOPE.md "Root CA / cert trust"):
+#   API_KEY, ROOT_CA_KEY_PATH (mount the real key — never bake it into the
+#   image), ROOT_CA_CN. Everything else in .env.example has a default.
+
+FROM docker.io/rust:1.96.1-trixie AS builder
+
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        musl-tools \
+        perl \
+        make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Map Docker's TARGETARCH (set automatically per --platform) to a Rust musl
+# target triple, and install it. Each --platform build runs natively under
+# qemu emulation for its own arch, so this is a same-arch (not cross-)
+# install either way.
+RUN case "$TARGETARCH" in \
+        amd64) echo x86_64-unknown-linux-musl > /rust_target ;; \
+        arm64) echo aarch64-unknown-linux-musl > /rust_target ;; \
+        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && rustup target add "$(cat /rust_target)"
+
+WORKDIR /app
+
+# Only what's actually needed to build the workspace — not the whole repo
+# (skips ssl/, scratch PDFs, docs, etc., keeping the build context and layer
+# cache scoped to what can actually invalidate the build).
+COPY Cargo.toml Cargo.lock ./
+COPY domain/ domain/
+COPY application/core/ application/core/
+COPY application/ds/ application/ds/
+COPY infrastructure/ infrastructure/
+COPY handler/ds/ handler/ds/
+
+RUN cargo build --release --target "$(cat /rust_target)" \
+        --bin digitalsign --features openssl/vendored \
+    && cp "target/$(cat /rust_target)/release/digitalsign" /digitalsign
+
+FROM docker.io/redhat/ubi8-micro:8.10 AS runtime
+
+COPY --from=builder /digitalsign /digitalsign
+
+# ubi8-micro has no /etc/passwd entries to add a named user to (no
+# useradd/microdnf here) — run as an arbitrary unprivileged numeric UID
+# instead. Works fine since the binary never does an NSS username lookup.
+USER 65532:65532
+EXPOSE 8080
+
+ENTRYPOINT ["/digitalsign"]

@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "domain",
+    "application/core",
+    "application/ds",
+    "infrastructure",
+    "handler/ds",
+]
+
+[workspace.dependencies]
+
+# --- Onion layers (see SCOPE.md architecture) ---
+domain = { path = "domain" }
+application-core = { path = "application/core" }
+application-ds = { path = "application/ds" }
+infrastructure = { path = "infrastructure" }
+handler-ds = { path = "handler/ds" }
+
+# --- Web Framework & Async Runtime ---
+actix-web = "4.14.0"
+tokio = { version = "1.53.0", features = ["full"] }
+
+# --- API docs ---
+utoipa = { version = "5.5", features = ["actix_extras"] }
+utoipa-swagger-ui = { version = "9.0", features = ["actix-web"] }
+
+# --- Crypto & PDF (see SCOPE.md tech stack) ---
+openssl = "0.10"
+openssl-sys = "0.9"
+foreign-types = "0.3"
+lopdf = "0.44.0"
+png = "0.18.1"
+flate2 = "1.1"
+
+# --- Serialization ---
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.138"
+base64 = "0.23.0"
+
+# --- Utilities & Logging ---
+dotenvy = "0.15.7"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+thiserror = "2.0.18"
+chrono = { version = "0.4.45", features = ["serde"] }

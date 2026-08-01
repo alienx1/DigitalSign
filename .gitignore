@@ -1,0 +1,29 @@
+# Nix
+.direnv/
+result
+result-*
+
+# Rust
+/target/
+**/target/
+
+# Env
+.env
+!.env.example
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+#ssl
+ssl
+
+# env
+.env
+.env.develop
+
+test_api

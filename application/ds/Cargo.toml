@@ -1,0 +1,12 @@
+[package]
+name = "application-ds"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+domain = { workspace = true }
+application-core = { workspace = true }
+serde = { workspace = true }
+utoipa = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }

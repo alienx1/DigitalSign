@@ -1,0 +1,9 @@
+target/
+.git/
+.direnv/
+result
+result-*
+.env
+ssl/
+*.pdf
+sign_mock_request.json

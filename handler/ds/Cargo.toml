@@ -1,0 +1,25 @@
+[package]
+name = "handler-ds"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "digitalsign"
+path = "src/main.rs"
+
+[dependencies]
+domain = { workspace = true }
+application-core = { workspace = true }
+application-ds = { workspace = true }
+infrastructure = { workspace = true }
+openssl = { workspace = true }
+actix-web = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+utoipa = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
