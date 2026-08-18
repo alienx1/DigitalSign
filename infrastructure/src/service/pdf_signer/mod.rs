@@ -9,7 +9,7 @@ mod tsa;
 pub use tsa::TsaConfig;
 
 use application_core::{CoreError, PdfSigner};
-use domain::{SignatureSpec, SignedDocument, UnsignedDocument};
+use domain::{LockAlgorithm, SignatureSpec, SignedDocument, UnsignedDocument};
 use incremental::DocMdpPermission;
 
 /// PAdES signing (CMS via openssl + PDF incremental update via lopdf), one
@@ -41,7 +41,7 @@ impl PdfSigner for LopdfPdfSigner {
         &self,
         document: &UnsignedDocument,
         signatures: &[SignatureSpec],
-        lock_with_national_id: bool,
+        lock: Option<LockAlgorithm>,
     ) -> Result<SignedDocument, CoreError> {
         let mut bytes = document.bytes.clone();
 
@@ -52,19 +52,19 @@ impl PdfSigner for LopdfPdfSigner {
         // rather than accepted as a separate request field, so a caller
         // can't lock the document with an identity that isn't actually
         // vouching for it.
-        let password = if lock_with_national_id {
+        let password = if let Some(algorithm) = lock {
             let first = signatures.first().ok_or_else(|| {
-                CoreError::Signing("lock_with_national_id requires at least one signature".into())
+                CoreError::Signing("lock requires at least one signature".into())
             })?;
             let (_, cert, _) = pkcs12::unpack(&first.key.pkcs12_der, &first.key.derived_key)?;
             let national_id = pkcs12::national_id(&cert).ok_or_else(|| {
                 CoreError::Signing(
-                    "lock_with_national_id requires the first signature's certificate to carry \
+                    "lock requires the first signature's certificate to carry \
                      a national ID (subject.serialNumber = \"IDC-<13 digits>\", as /ds/keypair sets)"
                         .into(),
                 )
             })?;
-            bytes = encryption::encrypt_with_password(&bytes, &national_id)?;
+            bytes = encryption::encrypt_with_password(&bytes, &national_id, algorithm)?;
             Some(national_id)
         } else {
             None

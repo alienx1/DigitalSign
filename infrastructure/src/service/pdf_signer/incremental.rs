@@ -401,18 +401,38 @@ pub fn sign_one(
         first_placeholder_start + 2 * field_stride,
     ];
 
-    // PDF encryption (RC4/AES on strings and streams) applies to a
-    // signature's own /Contents value like any other string — there's no
-    // spec-level "exempt the signature" flag, and `lopdf`'s writer doesn't
-    // special-case it either. So when the document is encrypted, the
-    // all-zero placeholder we wrote into `sig_dict` above didn't survive
-    // `incr.save_to` as plaintext zero bytes — it comes out RC4-XORed with
-    // this object's derived key, same as everything else new this call
-    // added. Reproduce that transform ourselves (on a throwaway clone, NOT
-    // the object actually stored in `new_document` — encrypting that too
-    // would double-encrypt it once the writer's own pass runs) purely to
-    // know what ciphertext to search `buf` for.
-    let contents_hex_placeholder = match &encryption_state {
+    // Locate our /Contents hex string structurally rather than by predicted
+    // content. That trick (encrypt a throwaway clone of the placeholder,
+    // then search `buf` for the resulting ciphertext) worked for RC4, a
+    // deterministic stream cipher, but AES-CBC draws a random IV on every
+    // encryption call — the writer's real ciphertext can never be predicted
+    // in advance, only its length. `/Contents<` is `lopdf`'s writer output
+    // for exactly one thing — a dictionary key "Contents" set to a
+    // `StringFormat::Hexadecimal` value (a reference renders as "N G R", an
+    // array as "[...]") — so it names our signature's placeholder uniquely
+    // among object *kinds*; restricting the search to this call's own
+    // newly-appended bytes (`document_bytes.len()..`) rules out matching a
+    // *different* signature's /Contents left over from an earlier revision
+    // of a multi-signature document.
+    let appended = &buf[document_bytes.len()..];
+    let contents_anchor_matches = find_all(appended, b"/Contents<");
+    if contents_anchor_matches.len() != 1 {
+        return Err(CoreError::Signing(format!(
+            "expected exactly 1 Contents placeholder anchor, found {}",
+            contents_anchor_matches.len()
+        )));
+    }
+    let contents_hex_start = document_bytes.len() + contents_anchor_matches[0] + b"/Contents<".len();
+
+    // The placeholder's on-disk length is still fully deterministic per
+    // cipher, even though AES's ciphertext bytes aren't: RC4 is
+    // length-preserving, while AES-CBC always prepends a 16-byte IV and
+    // appends a full PKCS#7 padding block. Get it by asking `lopdf` to
+    // encrypt a throwaway clone (NOT the object actually stored in
+    // `new_document` — encrypting that too would double-encrypt it once the
+    // writer's own pass runs) of our all-zero placeholder and reading off
+    // `.len()`; the ciphertext content itself is irrelevant here.
+    let on_disk_len = match &encryption_state {
         Some(state) => {
             let mut placeholder =
                 Object::String(vec![0u8; CONTENTS_RESERVED_BYTES], StringFormat::Hexadecimal);
@@ -421,19 +441,11 @@ pub fn sign_one(
             let Object::String(ciphertext, _) = placeholder else {
                 unreachable!("encrypt_object preserves the String variant")
             };
-            hex_upper(&ciphertext)
+            ciphertext.len()
         }
-        None => vec![b'0'; CONTENTS_RESERVED_BYTES * 2],
+        None => CONTENTS_RESERVED_BYTES,
     };
-    let contents_matches = find_all(&buf, &contents_hex_placeholder);
-    if contents_matches.len() != 1 {
-        return Err(CoreError::Signing(format!(
-            "expected exactly 1 Contents placeholder, found {}",
-            contents_matches.len()
-        )));
-    }
-    let contents_hex_start = contents_matches[0];
-    let contents_hex_end = contents_hex_start + CONTENTS_RESERVED_BYTES * 2;
+    let contents_hex_end = contents_hex_start + on_disk_len * 2;
 
     // --- patch in the real /ByteRange (decimal digits, trailing-space padded to
     // the same fixed width — leading zeros are legal PDF integer syntax but not
@@ -468,7 +480,7 @@ pub fn sign_one(
 
     // --- sign everything except the reserved Contents hex payload and its
     // surrounding `<`/`>` delimiters, per the declared /ByteRange above ---
-    let mut digest_input = Vec::with_capacity(buf.len() - CONTENTS_RESERVED_BYTES * 2);
+    let mut digest_input = Vec::with_capacity(buf.len() - on_disk_len * 2);
     digest_input.extend_from_slice(&buf[..signed_first_part_end]);
     digest_input.extend_from_slice(&buf[signed_second_part_start..]);
 
@@ -477,16 +489,16 @@ pub fn sign_one(
         .to_der()
         .map_err(|e| CoreError::Signing(format!("CMS serialization failed: {e}")))?;
 
-    if cms_der.len() > CONTENTS_RESERVED_BYTES {
+    if cms_der.len() > on_disk_len {
         return Err(CoreError::Signing(format!(
             "CMS signature ({} bytes) exceeds reserved space ({} bytes)",
             cms_der.len(),
-            CONTENTS_RESERVED_BYTES
+            on_disk_len
         )));
     }
 
     let mut contents_plaintext = cms_der;
-    contents_plaintext.resize(CONTENTS_RESERVED_BYTES, 0u8);
+    contents_plaintext.resize(on_disk_len, 0u8);
 
     // Deliberately NOT re-encrypted, even though the placeholder we're
     // overwriting was (see the search above) — real-world PDF viewers

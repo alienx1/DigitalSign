@@ -58,15 +58,20 @@ documents, targeting PAdES / ISO 32000 compliance (Adobe "Signature Valid" verif
    password-protects the signed PDF (open password) using the FIRST user's own national ID,
    read back out of their certificate's `serialNumber` (`IDC-<13 digits>`) rather than accepted
    as a separate field — a caller can't lock a document with an identity that isn't actually
-   vouching for it. Encryption happens BEFORE any signing (PDF Standard Security Handler,
-   RC4-128 — see `encryption.rs` for why AES isn't offered: its block padding breaks the fixed
-   `/Contents` reservation the whole signing pipeline depends on). The signature's own
-   `/Contents` is deliberately left unencrypted even though the rest of the document is —
-   verified both ways: a first attempt that also encrypted it produced a byte-perfect,
-   independently `openssl cms`-verifiable CMS blob yet `pdfsig` still reported "Invalid or
-   missing Signature string", because real viewers never attempt to decrypt that field, by
-   long-standing convention this crate's writer doesn't itself know about. Fails the request
-   (not a silent no-op) if the first signature's certificate carries no national ID.
+   vouching for it. Encryption happens BEFORE any signing (PDF Standard Security Handler),
+   cipher chosen via `lock_algorithm: "rc4128" | "aes128" | "aes256"` (default `rc4128`, for
+   backward compatibility — RC4 was this feature's first, and for a while only, cipher).
+   `/Contents`'s reserved placeholder is now located structurally (the `/Contents<` anchor,
+   scoped to this call's own newly-appended bytes) with a dynamically-computed on-disk length,
+   rather than by predicting ciphertext — RC4 is a length-preserving stream cipher so its
+   ciphertext could be predicted and searched for, but AES-CBC draws a random IV per encryption
+   call, making that trick impossible even though the resulting length is still deterministic.
+   The signature's own `/Contents` is deliberately left unencrypted even though the rest of the
+   document is — verified both ways: a first attempt that also encrypted it produced a
+   byte-perfect, independently `openssl cms`-verifiable CMS blob yet `pdfsig` still reported
+   "Invalid or missing Signature string", because real viewers never attempt to decrypt that
+   field, by long-standing convention this crate's writer doesn't itself know about. Fails the
+   request (not a silent no-op) if the first signature's certificate carries no national ID.
 7. **Auth** — every `/ds/*` route requires a valid `X-API-Key` header (see Policy decisions).
    `/ocsp` is deliberately excluded (item 5).
 
