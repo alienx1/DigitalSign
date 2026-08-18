@@ -2,7 +2,7 @@ use application_core::CoreError;
 use domain::SignatureSpec;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use lopdf::{Dictionary, Document, IncrementalDocument, Object, StringFormat};
+use lopdf::{Dictionary, Document, IncrementalDocument, LoadOptions, Object, StringFormat};
 use std::io::Write;
 
 use super::appearance;
@@ -53,6 +53,7 @@ pub fn sign_one(
     spec: &SignatureSpec,
     docmdp: Option<DocMdpPermission>,
     tsa: Option<&TsaConfig>,
+    password: Option<&str>,
 ) -> Result<Vec<u8>, CoreError> {
     let (pkey, cert, ca_chain) = pkcs12::unpack(&spec.key.pkcs12_der, &spec.key.derived_key)?;
     let ca_chain = match ca_chain {
@@ -61,8 +62,25 @@ pub fn sign_one(
             .map_err(|e| CoreError::Signing(format!("failed to allocate cert stack: {e}")))?,
     };
 
-    let prev =
-        Document::load_mem(document_bytes).map_err(|e| CoreError::Signing(format!("invalid PDF: {e}")))?;
+    // `document_bytes` is already encrypted (see `mod.rs`/`encryption.rs`) —
+    // load-and-decrypt in one step so `prev.encryption_state` is populated,
+    // which is what tells the writer below to encrypt each object THIS call
+    // adds the same way, rather than leaving them as plaintext inside an
+    // otherwise-encrypted file.
+    let prev = match password {
+        Some(password) => Document::load_mem_with_options(document_bytes, LoadOptions::with_password(password))
+            .map_err(|e| CoreError::Signing(format!("invalid encrypted PDF: {e}")))?,
+        None => Document::load_mem(document_bytes)
+            .map_err(|e| CoreError::Signing(format!("invalid PDF: {e}")))?,
+    };
+    // Captured before `prev` moves into `create_from` below — needed to
+    // manually mirror (never mutate the object we hand to `new_document`
+    // with, since the writer's own automatic pass would then double-encrypt
+    // it) what ciphertext the writer will independently produce for our
+    // /Contents placeholder, and then again for the real signature bytes.
+    // See the long comment at this function's Contents-patching site for why
+    // this can't just be left to the writer like every other new object.
+    let encryption_state = prev.encryption_state.clone();
 
     let page_id = *prev
         .get_pages()
@@ -383,7 +401,30 @@ pub fn sign_one(
         first_placeholder_start + 2 * field_stride,
     ];
 
-    let contents_hex_placeholder = vec![b'0'; CONTENTS_RESERVED_BYTES * 2];
+    // PDF encryption (RC4/AES on strings and streams) applies to a
+    // signature's own /Contents value like any other string — there's no
+    // spec-level "exempt the signature" flag, and `lopdf`'s writer doesn't
+    // special-case it either. So when the document is encrypted, the
+    // all-zero placeholder we wrote into `sig_dict` above didn't survive
+    // `incr.save_to` as plaintext zero bytes — it comes out RC4-XORed with
+    // this object's derived key, same as everything else new this call
+    // added. Reproduce that transform ourselves (on a throwaway clone, NOT
+    // the object actually stored in `new_document` — encrypting that too
+    // would double-encrypt it once the writer's own pass runs) purely to
+    // know what ciphertext to search `buf` for.
+    let contents_hex_placeholder = match &encryption_state {
+        Some(state) => {
+            let mut placeholder =
+                Object::String(vec![0u8; CONTENTS_RESERVED_BYTES], StringFormat::Hexadecimal);
+            lopdf::encryption::encrypt_object(state, sig_id, &mut placeholder)
+                .map_err(|e| CoreError::Signing(format!("failed to mirror Contents encryption: {e}")))?;
+            let Object::String(ciphertext, _) = placeholder else {
+                unreachable!("encrypt_object preserves the String variant")
+            };
+            hex_upper(&ciphertext)
+        }
+        None => vec![b'0'; CONTENTS_RESERVED_BYTES * 2],
+    };
     let contents_matches = find_all(&buf, &contents_hex_placeholder);
     if contents_matches.len() != 1 {
         return Err(CoreError::Signing(format!(
@@ -444,12 +485,22 @@ pub fn sign_one(
         )));
     }
 
-    let mut hex = String::with_capacity(CONTENTS_RESERVED_BYTES * 2);
-    for b in &cms_der {
-        hex.push_str(&format!("{b:02X}"));
-    }
-    hex.push_str(&"0".repeat(CONTENTS_RESERVED_BYTES * 2 - hex.len()));
-    buf[contents_hex_start..contents_hex_end].copy_from_slice(hex.as_bytes());
+    let mut contents_plaintext = cms_der;
+    contents_plaintext.resize(CONTENTS_RESERVED_BYTES, 0u8);
+
+    // Deliberately NOT re-encrypted, even though the placeholder we're
+    // overwriting was (see the search above) — real-world PDF viewers
+    // (Adobe Reader, poppler) never decrypt a signature's /Contents, by
+    // long-standing convention, precisely so a signature keeps validating
+    // independent of the document's encryption. Verified both ways here: a
+    // first attempt that DID re-encrypt this field produced a `/Contents`
+    // that decrypts to a byte-perfect, `openssl cms`-verifiable CMS blob —
+    // proving the crypto and the placeholder-location logic were both
+    // already correct — yet `pdfsig` reported "Invalid or missing
+    // Signature string" regardless, because it (correctly, per that
+    // convention) never attempts to decrypt this field at all and was
+    // handed ciphertext.
+    buf[contents_hex_start..contents_hex_end].copy_from_slice(&hex_upper(&contents_plaintext));
 
     Ok(buf)
 }
@@ -482,6 +533,18 @@ fn flate_compress(data: &[u8]) -> Vec<u8> {
 
 fn format_pdf_date() -> String {
     format!("D:{}Z", chrono::Utc::now().format("%Y%m%d%H%M%S"))
+}
+
+/// Uppercase hex, matching exactly how `lopdf`'s writer encodes a
+/// `StringFormat::Hexadecimal` string (`write!(file, "{byte:02X}")` in
+/// `writer.rs`) — anything we search `buf` for after `incr.save_to` has to
+/// use the same case or `find_all` simply won't match.
+fn hex_upper(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.extend_from_slice(format!("{b:02X}").as_bytes());
+    }
+    out
 }
 
 fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {

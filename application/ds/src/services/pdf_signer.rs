@@ -18,7 +18,8 @@ impl SignPdfUseCase for SignPdfService {
         &self,
         document: UnsignedDocument,
         signatures: Vec<SignatureSpec>,
+        lock_with_national_id: bool,
     ) -> Result<SignedDocument, CoreError> {
-        self.signer.sign(&document, &signatures)
+        self.signer.sign(&document, &signatures, lock_with_national_id)
     }
 }

@@ -54,7 +54,20 @@ documents, targeting PAdES / ISO 32000 compliance (Adobe "Signature Valid" verif
    only ever answer `good` (matches this root CA) or `unknown` (doesn't) — never `revoked`.
    Verified against `openssl ocsp`'s offline verifier (`Response verify OK`) using a real
    request built against this service's actual root CA.
-6. **Auth** — every `/ds/*` route requires a valid `X-API-Key` header (see Policy decisions).
+6. **Lock with national ID** — `/ds/sign`'s `lock_with_national_id: bool` (default `false`)
+   password-protects the signed PDF (open password) using the FIRST user's own national ID,
+   read back out of their certificate's `serialNumber` (`IDC-<13 digits>`) rather than accepted
+   as a separate field — a caller can't lock a document with an identity that isn't actually
+   vouching for it. Encryption happens BEFORE any signing (PDF Standard Security Handler,
+   RC4-128 — see `encryption.rs` for why AES isn't offered: its block padding breaks the fixed
+   `/Contents` reservation the whole signing pipeline depends on). The signature's own
+   `/Contents` is deliberately left unencrypted even though the rest of the document is —
+   verified both ways: a first attempt that also encrypted it produced a byte-perfect,
+   independently `openssl cms`-verifiable CMS blob yet `pdfsig` still reported "Invalid or
+   missing Signature string", because real viewers never attempt to decrypt that field, by
+   long-standing convention this crate's writer doesn't itself know about. Fails the request
+   (not a silent no-op) if the first signature's certificate carries no national ID.
+7. **Auth** — every `/ds/*` route requires a valid `X-API-Key` header (see Policy decisions).
    `/ocsp` is deliberately excluded (item 5).
 
 ## Out of scope (for now)

@@ -34,3 +34,17 @@ pub fn common_name(cert: &X509) -> String {
         .and_then(|entry| entry.data().to_string().ok())
         .unwrap_or_else(|| "Unknown signer".to_string())
 }
+
+/// Extracts the 13-digit national ID from the certificate's `serialNumber`
+/// subject attribute, if it's in the `IDC-<13 digits>` form `/ds/keypair`
+/// writes there (see `key_generator.rs`) — `None` for any cert lacking that
+/// attribute or not in that format (e.g. an externally-supplied p12).
+pub fn national_id(cert: &X509) -> Option<String> {
+    let value = cert
+        .subject_name()
+        .entries_by_nid(openssl::nid::Nid::SERIALNUMBER)
+        .next()
+        .and_then(|entry| entry.data().to_string().ok())?;
+    let digits = value.strip_prefix("IDC-")?;
+    (digits.len() == 13 && digits.bytes().all(|b| b.is_ascii_digit())).then(|| digits.to_string())
+}

@@ -18,10 +18,11 @@ impl<S: PdfSigner> PdfSigner for TracingPdfSigner<S> {
         &self,
         document: &UnsignedDocument,
         signatures: &[SignatureSpec],
+        lock_with_national_id: bool,
     ) -> Result<SignedDocument, CoreError> {
         let pages: Vec<u32> = signatures.iter().map(|s| s.position.page).collect();
-        tracing::info!(count = signatures.len(), ?pages, "signing pdf");
-        let result = self.inner.sign(document, signatures);
+        tracing::info!(count = signatures.len(), ?pages, lock_with_national_id, "signing pdf");
+        let result = self.inner.sign(document, signatures, lock_with_national_id);
         if let Err(e) = &result {
             tracing::error!(error = %e, "pdf signing failed");
         }

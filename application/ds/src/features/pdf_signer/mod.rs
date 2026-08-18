@@ -14,5 +14,6 @@ pub trait SignPdfUseCase: Send + Sync {
         &self,
         document: UnsignedDocument,
         signatures: Vec<SignatureSpec>,
+        lock_with_national_id: bool,
     ) -> Result<SignedDocument, CoreError>;
 }

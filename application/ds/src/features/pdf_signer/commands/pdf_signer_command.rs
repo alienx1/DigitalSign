@@ -29,6 +29,16 @@ pub struct UserSignatureDto {
 pub struct PdfSignerRequestModel {
     pub document_base64: String,
     pub users: Vec<UserSignatureDto>,
+    /// If true, password-protects the signed PDF (open password) using the
+    /// FIRST user's own national ID — read back out of their certificate's
+    /// `serialNumber` (`IDC-<13 digits>`, as `/ds/keypair` sets it), not
+    /// accepted as a separate field here. Encryption happens before signing,
+    /// so every embedded signature still validates once the file is opened
+    /// with that password. Fails the request if the first user's
+    /// certificate doesn't carry a national ID in that form (e.g. an
+    /// externally-supplied p12).
+    #[serde(default)]
+    pub lock_with_national_id: bool,
 }
 
 #[derive(Debug, Error)]
@@ -96,6 +106,6 @@ pub fn pdf_signer_command(
         }
     }
 
-    let signed = use_case.execute(document, signatures)?;
+    let signed = use_case.execute(document, signatures, req.lock_with_national_id)?;
     Ok(signed.bytes)
 }
