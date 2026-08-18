@@ -9,18 +9,51 @@ use super::appearance;
 use super::cades;
 use super::image::decode_png;
 use super::pkcs12;
+use super::tsa::TsaConfig;
 
 /// Reserved space (bytes) for the CMS/PKCS#7 signature, hex-encoded into
-/// `/Contents`. Sized to comfortably fit both our own EC-256 certs and an
-/// externally-supplied RSA key (up to RSA-4096) with a small CA chain plus
-/// the CAdES `signingCertificateV2` attribute; padded with trailing zero
-/// bytes if shorter.
-const CONTENTS_RESERVED_BYTES: usize = 16384;
+/// `/Contents`. Sized to comfortably fit our own EC-256 certs or an
+/// externally-supplied RSA key (up to RSA-4096) with a small CA chain, the
+/// CAdES `signingCertificateV2` attribute, AND (when `TSA_URL` is set) an
+/// embedded RFC 3161 `TimeStampToken` — measured directly against 6 public
+/// TSAs (FreeTSA, DigiCert, Sectigo, GlobalSign, Apple, Certum), the largest
+/// (GlobalSign's) alone was ~7.7KB; padded with trailing zero bytes if
+/// shorter.
+const CONTENTS_RESERVED_BYTES: usize = 65536;
 /// Fixed width reserved for each `/ByteRange` integer (decimal digits,
 /// trailing-space padded). 10 digits covers files up to ~9.3GB.
 const BYTE_RANGE_DIGIT_WIDTH: usize = 10;
 
-pub fn sign_one(document_bytes: &[u8], spec: &SignatureSpec) -> Result<Vec<u8>, CoreError> {
+/// DocMDP permission level a certifying signature declares for the whole
+/// document (ISO 32000-1 Table 254's `/P`). Only ever attached to the FIRST
+/// signature of a request — see `mod.rs` — since a document can have at most
+/// one `/Perms/DocMDP` entry, and it must reflect what was true when it was
+/// created, not something a later signature could retroactively change.
+#[derive(Clone, Copy)]
+pub enum DocMdpPermission {
+    /// No further changes of any kind allowed — used when this is the only
+    /// signature in the request.
+    NoChanges,
+    /// Form fill-in and additional signatures allowed, nothing else — used
+    /// when more signatures follow in the same request.
+    FormFillingAndSigning,
+}
+
+impl DocMdpPermission {
+    fn p_value(self) -> i64 {
+        match self {
+            DocMdpPermission::NoChanges => 1,
+            DocMdpPermission::FormFillingAndSigning => 2,
+        }
+    }
+}
+
+pub fn sign_one(
+    document_bytes: &[u8],
+    spec: &SignatureSpec,
+    docmdp: Option<DocMdpPermission>,
+    tsa: Option<&TsaConfig>,
+) -> Result<Vec<u8>, CoreError> {
     let (pkey, cert, ca_chain) = pkcs12::unpack(&spec.key.pkcs12_der, &spec.key.derived_key)?;
     let ca_chain = match ca_chain {
         Some(chain) => chain,
@@ -159,6 +192,25 @@ pub fn sign_one(document_bytes: &[u8], spec: &SignatureSpec) -> Result<Vec<u8>, 
         "M",
         Object::String(format_pdf_date().into_bytes(), StringFormat::Literal),
     );
+    if let Some(permission) = docmdp {
+        // ISO 32000-1 §12.8.2.2 (Table 254) — a DocMDP signature reference,
+        // naming the permission level (/P) this certifying signature grants
+        // for the rest of the document's lifetime. No /DigestMethod/Data:
+        // those exist for transforms (UR, FieldMDP) that digest a subset of
+        // the document; DocMDP's scope is "everything", already covered by
+        // this signature's own /ByteRange, so there's nothing extra to hash.
+        let mut transform_params = Dictionary::new();
+        transform_params.set("Type", Object::Name(b"TransformParams".to_vec()));
+        transform_params.set("P", Object::Integer(permission.p_value()));
+        transform_params.set("V", Object::Name(b"1.2".to_vec()));
+
+        let mut sig_ref = Dictionary::new();
+        sig_ref.set("Type", Object::Name(b"SigRef".to_vec()));
+        sig_ref.set("TransformMethod", Object::Name(b"DocMDP".to_vec()));
+        sig_ref.set("TransformParams", Object::Dictionary(transform_params));
+
+        sig_dict.set("Reference", Object::Array(vec![Object::Dictionary(sig_ref)]));
+    }
     incr.new_document.set_object(sig_id, Object::Dictionary(sig_dict));
 
     // --- widget annotation, linking the appearance + signature to a page position ---
@@ -267,6 +319,19 @@ pub fn sign_one(document_bytes: &[u8], spec: &SignatureSpec) -> Result<Vec<u8>, 
         }
     }
 
+    // --- certify the document via this signature's /Perms/DocMDP, if this
+    // is the certifying signature (see `DocMdpPermission`'s doc comment) ---
+    if docmdp.is_some() {
+        let mut perms = Dictionary::new();
+        perms.set("DocMDP", Object::Reference(sig_id));
+        let root = incr
+            .new_document
+            .get_object_mut(root_id)
+            .and_then(Object::as_dict_mut)
+            .map_err(|e| CoreError::Signing(e.to_string()))?;
+        root.set("Perms", Object::Dictionary(perms));
+    }
+
     // --- pass 1: serialize with placeholders in place ---
     let mut buf = Vec::new();
     incr.save_to(&mut buf)
@@ -366,7 +431,7 @@ pub fn sign_one(document_bytes: &[u8], spec: &SignatureSpec) -> Result<Vec<u8>, 
     digest_input.extend_from_slice(&buf[..signed_first_part_end]);
     digest_input.extend_from_slice(&buf[signed_second_part_start..]);
 
-    let cms = cades::sign(&cert, &pkey, &ca_chain, &digest_input)?;
+    let cms = cades::sign(&cert, &pkey, &ca_chain, &digest_input, tsa)?;
     let cms_der = cms
         .to_der()
         .map_err(|e| CoreError::Signing(format!("CMS serialization failed: {e}")))?;

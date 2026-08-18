@@ -1,6 +1,9 @@
 pub mod commands;
 
-pub use commands::{pdf_signer_command, PdfSignerRequestModel, SignPdfError, SignatureSpecDto};
+pub use commands::{
+    pdf_signer_command, PdfSignerRequestModel, SignPdfError, SignaturePlacementDto,
+    UserSignatureDto,
+};
 
 use application_core::CoreError;
 use domain::{SignatureSpec, SignedDocument, UnsignedDocument};

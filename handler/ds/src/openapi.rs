@@ -1,7 +1,12 @@
 use crate::routes::keypair::__path_generate_keypair;
+use crate::routes::ocsp::__path_ocsp_responder;
 use crate::routes::sign::__path_sign_pdf;
-use application_ds::features::key_generator::{KeyGeneratorRequestModel, KeyGeneratorResponseModel};
-use application_ds::features::pdf_signer::{PdfSignerRequestModel, SignatureSpecDto};
+use application_ds::features::key_generator::{
+    KeyAlgorithmDto, KeyGeneratorRequestModel, KeyGeneratorResponseModel,
+};
+use application_ds::features::pdf_signer::{
+    PdfSignerRequestModel, SignaturePlacementDto, UserSignatureDto,
+};
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
@@ -21,14 +26,19 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     info(title = "DigitalSign API", description = "PDF key generation and PAdES signing"),
-    paths(generate_keypair, sign_pdf),
+    paths(generate_keypair, sign_pdf, ocsp_responder),
     components(schemas(
         KeyGeneratorRequestModel,
         KeyGeneratorResponseModel,
+        KeyAlgorithmDto,
         PdfSignerRequestModel,
-        SignatureSpecDto
+        UserSignatureDto,
+        SignaturePlacementDto
     )),
-    tags((name = "ds", description = "DigitalSign signing endpoints")),
+    tags(
+        (name = "ds", description = "DigitalSign signing endpoints"),
+        (name = "ocsp", description = "OCSP responder for this service's own root CA")
+    ),
     modifiers(&SecurityAddon)
 )]
 pub struct ApiDoc;

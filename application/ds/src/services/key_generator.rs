@@ -1,6 +1,6 @@
 use crate::features::key_generator::GenerateKeyPairUseCase;
 use application_core::{CoreError, KeyGenerator};
-use domain::{KeyPair, SignerIdentity};
+use domain::{KeyAlgorithm, KeyPair, SignerIdentity};
 use std::sync::Arc;
 
 pub struct GenerateKeyPairService {
@@ -14,7 +14,12 @@ impl GenerateKeyPairService {
 }
 
 impl GenerateKeyPairUseCase for GenerateKeyPairService {
-    fn execute(&self, identity: SignerIdentity, protection: Option<String>) -> Result<KeyPair, CoreError> {
-        self.generator.generate(&identity, protection.as_deref())
+    fn execute(
+        &self,
+        identity: SignerIdentity,
+        protection: Option<String>,
+        algorithm: KeyAlgorithm,
+    ) -> Result<KeyPair, CoreError> {
+        self.generator.generate(&identity, protection.as_deref(), algorithm)
     }
 }

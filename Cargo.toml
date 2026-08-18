@@ -15,7 +15,6 @@ domain = { path = "domain" }
 application-core = { path = "application/core" }
 application-ds = { path = "application/ds" }
 infrastructure = { path = "infrastructure" }
-handler-ds = { path = "handler/ds" }
 
 # --- Web Framework & Async Runtime ---
 actix-web = "4.14.0"

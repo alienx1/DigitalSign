@@ -3,6 +3,8 @@ mod routes;
 
 use actix_web::{web, Scope};
 use application_ds::{GenerateKeyPairUseCase, SignPdfUseCase};
+use openssl::pkey::{PKey, Private};
+use openssl::x509::X509;
 use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -21,6 +23,16 @@ pub fn scope(
             web::post().to(routes::keypair::generate_keypair),
         )
         .route("/sign", web::post().to(routes::sign::sign_pdf))
+}
+
+/// Mounted top-level, deliberately NOT under `/ds` (so it never picks up
+/// `ApiKeyAuth`) — an OCSP responder must be reachable by any relying party
+/// checking a certificate we issued, not just callers with our API key.
+pub fn ocsp_scope(root_key: PKey<Private>, root_cert: X509) -> Scope {
+    web::scope("/ocsp")
+        .app_data(web::Data::new(root_key))
+        .app_data(web::Data::new(root_cert))
+        .route("", web::post().to(routes::ocsp::ocsp_responder))
 }
 
 /// Serves Swagger UI at `/swagger-ui/` and the raw spec at `/api-docs/openapi.json`.

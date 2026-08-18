@@ -7,4 +7,7 @@ pub struct SignerIdentity {
     /// ISO 3166-1 alpha-2 country code (e.g. "TH", "US"), baked into the
     /// certificate subject's `C` attribute.
     pub country: String,
+    /// Government-issued national ID number, baked into the certificate
+    /// subject's `description` attribute.
+    pub national_id: String,
 }

@@ -1,3 +1,4 @@
+use super::tsa::{self, TsaConfig};
 use application_core::CoreError;
 use foreign_types::{ForeignType, ForeignTypeRef};
 use openssl::cms::{CMSOptions, CmsContentInfo};
@@ -6,7 +7,8 @@ use openssl::pkey::{HasPrivate, PKeyRef};
 use openssl::stack::StackRef;
 use openssl::x509::{X509, X509Ref};
 use openssl_sys as ffi;
-use std::os::raw::{c_int, c_uint};
+use std::ffi::CString;
+use std::os::raw::{c_int, c_uint, c_void};
 use std::ptr;
 
 /// Add the signer with the CAdES ESS `signing-certificate-v2` signed
@@ -47,7 +49,24 @@ extern "C" {
         dcont: *mut ffi::BIO,
         flags: c_uint,
     ) -> c_int;
+
+    // For reading back the just-computed signature value (to hash and send
+    // to a TSA) and for embedding its answer as an unsigned attribute — both
+    // absent from openssl-sys, same as everything above.
+    fn CMS_SignerInfo_get0_signature(si: *mut CmsSignerInfo) -> *mut ffi::ASN1_OCTET_STRING;
+    fn CMS_unsigned_add1_attr(si: *mut CmsSignerInfo, attr: *mut ffi::X509_ATTRIBUTE) -> c_int;
+    fn OBJ_txt2obj(s: *const std::os::raw::c_char, no_name: c_int) -> *mut ffi::ASN1_OBJECT;
 }
+
+/// id-aa-signatureTimeStampToken (RFC 5126 / ETSI EN 319 122's CAdES-T
+/// unsigned attribute) — verified empirically (see `tsa.rs`'s module doc)
+/// that embedding a real TSA's `TimeStampToken` here means passing its
+/// *complete* DER bytes (tag + length + content) unchanged as `bytes`, with
+/// `atrtype = V_ASN1_SEQUENCE`: `X509_ATTRIBUTE_create_by_OBJ`'s handling of
+/// aggregate types is an opaque embed, not a re-wrap — passing just the
+/// SEQUENCE's content (stripping its own header first, the natural-looking
+/// choice) silently produces a corrupt attribute instead of an error.
+const OID_SIGNATURE_TIMESTAMP_TOKEN: &str = "1.2.840.113549.1.9.16.2.14";
 
 fn err() -> CoreError {
     CoreError::Signing(format!("CMS signing failed: {}", ErrorStack::get()))
@@ -55,12 +74,14 @@ fn err() -> CoreError {
 
 /// `chain` — additional certs (e.g. the issuing root CA) to embed in the CMS
 /// certificate set alongside the signer's own, so a verifier can build the
-/// full chain instead of only ever seeing the leaf.
+/// full chain instead of only ever seeing the leaf. `tsa`, if given, RFC
+/// 3161-timestamps this signature (PAdES-B-T) — see `tsa.rs`.
 pub fn sign<T>(
     cert: &X509Ref,
     pkey: &PKeyRef<T>,
     chain: &StackRef<X509>,
     data: &[u8],
+    tsa_config: Option<&TsaConfig>,
 ) -> Result<CmsContentInfo, CoreError>
 where
     T: HasPrivate,
@@ -114,6 +135,42 @@ where
         ffi::BIO_free_all(data_bio);
         if rc != 1 {
             return Err(err());
+        }
+
+        // 5. RFC 3161 timestamp, if requested — must come after CMS_final:
+        // the TSA timestamps THIS signature's actual value, which only
+        // exists once finalization has computed it.
+        if let Some(tsa_config) = tsa_config {
+            let sig_octet_string = CMS_SignerInfo_get0_signature(si);
+            if sig_octet_string.is_null() {
+                return Err(err());
+            }
+            let sig_len = ffi::ASN1_STRING_length(sig_octet_string as *const _);
+            let sig_ptr = ffi::ASN1_STRING_get0_data(sig_octet_string as *const _);
+            let signature_der = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
+
+            let token = tsa::request_timestamp(tsa_config, signature_der)?;
+
+            let oid_cstr = CString::new(OID_SIGNATURE_TIMESTAMP_TOKEN)
+                .expect("static OID string has no NUL byte");
+            let obj = OBJ_txt2obj(oid_cstr.as_ptr(), 1);
+            if obj.is_null() {
+                return Err(err());
+            }
+            const V_ASN1_SEQUENCE: c_int = 16;
+            let attr = ffi::X509_ATTRIBUTE_create_by_OBJ(
+                ptr::null_mut(),
+                obj,
+                V_ASN1_SEQUENCE,
+                token.as_ptr() as *const c_void,
+                token.len() as c_int,
+            );
+            if attr.is_null() {
+                return Err(err());
+            }
+            if CMS_unsigned_add1_attr(si, attr) != 1 {
+                return Err(err());
+            }
         }
 
         Ok(cms)

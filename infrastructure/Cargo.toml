@@ -16,3 +16,5 @@ base64 = { workspace = true }
 png = { workspace = true }
 flate2 = { workspace = true }
 chrono = { workspace = true }
+yasna = { version = "0.6.0", features = ["time"] }
+ureq = "3.4.0"

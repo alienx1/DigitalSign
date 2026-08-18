@@ -25,7 +25,8 @@ pub async fn sign_pdf(
     let signed_bytes = match pdf_signer_command(use_case.get_ref().as_ref(), req.into_inner()) {
         Ok(bytes) => bytes,
         Err(SignPdfError::InvalidBase64 { field, source }) => {
-            return HttpResponse::BadRequest().body(format!("invalid {field}: {source}"))
+            tracing::warn!(field, %source, "sign request rejected: invalid base64");
+            return HttpResponse::BadRequest().body(format!("invalid {field}: {source}"));
         }
         Err(SignPdfError::Signing(e)) => {
             return HttpResponse::InternalServerError().body(e.to_string())
