@@ -1,6 +1,6 @@
 use crate::features::pdf_signer::SignPdfUseCase;
 use application_core::{CoreError, PdfSigner};
-use domain::{LockAlgorithm, SignatureSpec, SignedDocument, UnsignedDocument};
+use domain::{SignatureSpec, SignedDocument, UnsignedDocument};
 use std::sync::Arc;
 
 pub struct SignPdfService {
@@ -18,8 +18,8 @@ impl SignPdfUseCase for SignPdfService {
         &self,
         document: UnsignedDocument,
         signatures: Vec<SignatureSpec>,
-        lock: Option<LockAlgorithm>,
+        document_password: Option<&str>,
     ) -> Result<SignedDocument, CoreError> {
-        self.signer.sign(&document, &signatures, lock)
+        self.signer.sign(&document, &signatures, document_password)
     }
 }

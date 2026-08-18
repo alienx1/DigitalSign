@@ -1,5 +1,5 @@
 use application_core::{CoreError, PdfSigner};
-use domain::{LockAlgorithm, SignatureSpec, SignedDocument, UnsignedDocument};
+use domain::{SignatureSpec, SignedDocument, UnsignedDocument};
 
 /// Wraps any `PdfSigner` with an audit-trail log — every signing operation
 /// must be traceable.
@@ -18,11 +18,12 @@ impl<S: PdfSigner> PdfSigner for TracingPdfSigner<S> {
         &self,
         document: &UnsignedDocument,
         signatures: &[SignatureSpec],
-        lock: Option<LockAlgorithm>,
+        document_password: Option<&str>,
     ) -> Result<SignedDocument, CoreError> {
         let pages: Vec<u32> = signatures.iter().map(|s| s.position.page).collect();
-        tracing::info!(count = signatures.len(), ?pages, ?lock, "signing pdf");
-        let result = self.inner.sign(document, signatures, lock);
+        // Logs only whether the input was locked, never the password itself.
+        tracing::info!(count = signatures.len(), ?pages, locked = document_password.is_some(), "signing pdf");
+        let result = self.inner.sign(document, signatures, document_password);
         if let Err(e) = &result {
             tracing::error!(error = %e, "pdf signing failed");
         }

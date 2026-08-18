@@ -2,5 +2,6 @@ pub mod features;
 pub mod services;
 
 pub use features::key_generator::GenerateKeyPairUseCase;
+pub use features::pdf_locker::LockPdfUseCase;
 pub use features::pdf_signer::SignPdfUseCase;
-pub use services::{GenerateKeyPairService, SignPdfService};
+pub use services::{GenerateKeyPairService, LockPdfService, SignPdfService};

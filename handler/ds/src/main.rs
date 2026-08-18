@@ -1,9 +1,9 @@
 use actix_web::middleware::from_fn;
 use actix_web::{App, HttpServer};
-use application_ds::{GenerateKeyPairService, SignPdfService};
+use application_ds::{GenerateKeyPairService, LockPdfService, SignPdfService};
 use infrastructure::{
-    build_self_signed_ca, request_log, ApiKeyAuth, LopdfPdfSigner, OpensslKeyGenerator,
-    TracingKeyGenerator, TracingPdfSigner, TsaConfig,
+    build_self_signed_ca, request_log, ApiKeyAuth, LopdfPdfLocker, LopdfPdfSigner,
+    OpensslKeyGenerator, TracingKeyGenerator, TracingPdfLocker, TracingPdfSigner, TsaConfig,
 };
 use openssl::pkey::PKey;
 use std::sync::Arc;
@@ -84,6 +84,9 @@ async fn main() -> std::io::Result<()> {
     let sign_use_case = Arc::new(SignPdfService::new(Arc::new(TracingPdfSigner::new(
         LopdfPdfSigner::new(tsa_config),
     ))));
+    let lock_use_case = Arc::new(LockPdfService::new(Arc::new(TracingPdfLocker::new(
+        LopdfPdfLocker::new(),
+    ))));
 
     let host = std::env::var("APP_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port: u16 = std::env::var("APP_PORT")
@@ -100,6 +103,7 @@ async fn main() -> std::io::Result<()> {
                 handler_ds::scope(
                     keypair_use_case.clone(),
                     sign_use_case.clone(),
+                    lock_use_case.clone(),
                     max_json_body_bytes,
                 )
                 .wrap(ApiKeyAuth::new(api_key.clone())),

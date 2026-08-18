@@ -7,7 +7,7 @@ mod lock_algorithm;
 mod signature;
 mod signature_spec;
 
-pub use document::{SignedDocument, UnsignedDocument};
+pub use document::{LockedDocument, SignedDocument, UnsignedDocument};
 pub use error::DomainError;
 pub use identity::SignerIdentity;
 pub use key::KeyPair;

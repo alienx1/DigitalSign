@@ -54,24 +54,40 @@ documents, targeting PAdES / ISO 32000 compliance (Adobe "Signature Valid" verif
    only ever answer `good` (matches this root CA) or `unknown` (doesn't) — never `revoked`.
    Verified against `openssl ocsp`'s offline verifier (`Response verify OK`) using a real
    request built against this service's actual root CA.
-6. **Lock with national ID** — `/ds/sign`'s `lock_with_national_id: bool` (default `false`)
-   password-protects the signed PDF (open password) using the FIRST user's own national ID,
-   read back out of their certificate's `serialNumber` (`IDC-<13 digits>`) rather than accepted
-   as a separate field — a caller can't lock a document with an identity that isn't actually
-   vouching for it. Encryption happens BEFORE any signing (PDF Standard Security Handler),
-   cipher chosen via `lock_algorithm: "rc4128" | "aes128" | "aes256"` (default `rc4128`, for
-   backward compatibility — RC4 was this feature's first, and for a while only, cipher).
-   `/Contents`'s reserved placeholder is now located structurally (the `/Contents<` anchor,
-   scoped to this call's own newly-appended bytes) with a dynamically-computed on-disk length,
-   rather than by predicting ciphertext — RC4 is a length-preserving stream cipher so its
-   ciphertext could be predicted and searched for, but AES-CBC draws a random IV per encryption
-   call, making that trick impossible even though the resulting length is still deterministic.
-   The signature's own `/Contents` is deliberately left unencrypted even though the rest of the
-   document is — verified both ways: a first attempt that also encrypted it produced a
-   byte-perfect, independently `openssl cms`-verifiable CMS blob yet `pdfsig` still reported
-   "Invalid or missing Signature string", because real viewers never attempt to decrypt that
-   field, by long-standing convention this crate's writer doesn't itself know about. Fails the
-   request (not a silent no-op) if the first signature's certificate carries no national ID.
+6. **Lock (PDF open password)** — `POST /ds/lock`, a standalone step run BEFORE `/ds/sign`
+   (its own endpoint, not a flag on `/sign` — PDF Standard Security Handler encryption changes
+   every string/stream's raw bytes, so it must happen first and signatures must be computed over
+   the already-encrypted document). Takes 1 or 2 signers' p12s; each one's own national ID, read
+   back out of their certificate's `serialNumber` (`IDC-<13 digits>`) rather than accepted as a
+   separate field, becomes an opening password — the first is the PDF's user password, a second
+   (if given) is the owner password, and **both independently open the file**. This is the
+   Standard Security Handler's actual limit (ISO 32000-1 §7.6): exactly two password slots, never
+   more, regardless of cipher — 3+ openers is a 500 (`PDF Standard Security Handler supports
+   exactly 1 or 2 opening passwords`), not something approximated. The response returns both
+   passwords alongside the locked PDF (multipart: `locked_pdf` + `passwords` JSON) so the caller
+   doesn't have to re-derive them; one of them is then passed as `/ds/sign`'s `document_password`
+   so newly-appended signature objects get encrypted the same way as the rest of the file.
+   Cipher chosen via `lock_algorithm: "rc4128" | "aes128"` (default `rc4128`, for backward
+   compatibility — RC4 was this feature's first, and for a while only, cipher). `aes256` is
+   accepted by the wire format but currently rejected (500) at the infrastructure layer: verified
+   independently (a from-scratch Python AES-256-CBC decrypt against the derived file key, not
+   just re-using `lopdf`'s own code) that the underlying `lopdf` 0.44.0 (latest available)
+   produces byte-correct ciphertext — the exact right key decrypts both strings and streams by
+   hand — yet real-world viewers (confirmed with Poppler's `pdfinfo`/`pdftotext`) reliably fail to
+   read the resulting file, silently producing garbage instead of an error. That's a structural
+   `/Encrypt`-dictionary-level incompatibility in `lopdf`'s V5/R6 writer, not something safe to
+   patch around here; revisit once upstream fixes it.
+   `/Contents`'s reserved placeholder is located structurally (the `/Contents<` anchor, scoped to
+   `/ds/sign`'s own newly-appended bytes) with a dynamically-computed on-disk length, rather than
+   by predicting ciphertext — RC4 is a length-preserving stream cipher so its ciphertext could be
+   predicted and searched for, but AES-CBC draws a random IV per encryption call, making that
+   trick impossible even though the resulting length is still deterministic. The signature's own
+   `/Contents` is deliberately left unencrypted even though the rest of the document is —
+   verified both ways: a first attempt that also encrypted it produced a byte-perfect,
+   independently `openssl cms`-verifiable CMS blob yet `pdfsig` still reported "Invalid or missing
+   Signature string", because real viewers never attempt to decrypt that field, by long-standing
+   convention this crate's writer doesn't itself know about. `/ds/lock` fails the request (not a
+   silent no-op) if any opener's certificate carries no national ID.
 7. **Auth** — every `/ds/*` route requires a valid `X-API-Key` header (see Policy decisions).
    `/ocsp` is deliberately excluded (item 5).
 

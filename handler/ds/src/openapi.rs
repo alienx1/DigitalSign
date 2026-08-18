@@ -1,9 +1,11 @@
 use crate::routes::keypair::__path_generate_keypair;
+use crate::routes::lock::__path_lock_pdf;
 use crate::routes::ocsp::__path_ocsp_responder;
 use crate::routes::sign::__path_sign_pdf;
 use application_ds::features::key_generator::{
     KeyAlgorithmDto, KeyGeneratorRequestModel, KeyGeneratorResponseModel,
 };
+use application_ds::features::pdf_locker::{LockAlgorithmDto, LockOpenerDto, LockPdfRequestModel};
 use application_ds::features::pdf_signer::{
     PdfSignerRequestModel, SignaturePlacementDto, UserSignatureDto,
 };
@@ -26,14 +28,17 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     info(title = "DigitalSign API", description = "PDF key generation and PAdES signing"),
-    paths(generate_keypair, sign_pdf, ocsp_responder),
+    paths(generate_keypair, sign_pdf, lock_pdf, ocsp_responder),
     components(schemas(
         KeyGeneratorRequestModel,
         KeyGeneratorResponseModel,
         KeyAlgorithmDto,
         PdfSignerRequestModel,
         UserSignatureDto,
-        SignaturePlacementDto
+        SignaturePlacementDto,
+        LockPdfRequestModel,
+        LockOpenerDto,
+        LockAlgorithmDto
     )),
     tags(
         (name = "ds", description = "DigitalSign signing endpoints"),
