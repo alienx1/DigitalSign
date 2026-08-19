@@ -21,8 +21,16 @@ pub async fn generate_keypair(
     use_case: web::Data<Arc<dyn GenerateKeyPairUseCase>>,
     req: web::Json<KeyGeneratorRequestModel>,
 ) -> HttpResponse {
-    match key_generator_command(use_case.get_ref().as_ref(), req.into_inner()) {
-        Ok(response) => HttpResponse::Ok().json(response),
+    let use_case = use_case.get_ref().clone();
+    let req = req.into_inner();
+
+    // Rsa2048/3072/4096 keygen (plus the cert/PKCS#12 build around it) is
+    // CPU-bound and can take seconds — run it on actix-web's blocking thread
+    // pool so it doesn't stall this worker's ability to service other
+    // connections in the meantime.
+    match web::block(move || key_generator_command(use_case.as_ref(), req)).await {
+        Ok(Ok(response)) => HttpResponse::Ok().json(response),
+        Ok(Err(e)) => HttpResponse::InternalServerError().body(e.to_string()),
         Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
     }
 }
